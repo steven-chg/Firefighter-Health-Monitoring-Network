@@ -387,5 +387,5 @@ void checkAlerts(float temperature, float ax, float ay, float az, int heartRateV
         }
     } else {
         wearableAlert.isMotionAlert = false;
-        wearableAlert.motionAlertStart
+        wearableAlert.motionAlertStart;
     }

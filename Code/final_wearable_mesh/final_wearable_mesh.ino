@@ -37,7 +37,11 @@ Adafruit_GPS GPS(&gpsSerial);
 // Set GPSECHO to 'false' to turn off echoing the GPS data to the Serial console
 #define GPSECHO  true
 
-int counter = 0;
+// Add these at the top of your file with other global variables
+hw_timer_t* buzzerTimer = NULL;
+volatile bool buzzerActive = false;
+volatile int currentFreq = 0;
+volatile unsigned long buzzerEndTime = 0;
 
 // Array to store recent message IDs
 unsigned long trackedMsgIDs[MAX_TRACKED_MESSAGES];
@@ -81,6 +85,95 @@ struct LoRaMessage {
 };
 
 AlertStatus wearableAlert;
+
+
+// // Timer interrupt handler
+// void IRAM_ATTR onBuzzerTimer() {
+//     static bool buzzerState = false;
+//     if (millis() >= buzzerEndTime) {
+//         // Stop the buzzer
+//         digitalWrite(BUZZER_PIN, LOW);
+//         buzzerActive = false;
+//         timerAlarmDisable(buzzerTimer);
+//         return;
+//     }
+    
+//     // Toggle the buzzer state
+//     buzzerState = !buzzerState;
+//     digitalWrite(BUZZER_PIN, buzzerState);
+// }
+
+// // Non-blocking version of playTone
+// void playToneNB(int frequency, int duration) {
+//     if (buzzerActive) return; // Don't interrupt current tone
+    
+//     buzzerActive = true;
+//     currentFreq = frequency;
+//     buzzerEndTime = millis() + duration;
+    
+//     // Calculate period in microseconds
+//     unsigned long period = 1000000 / frequency;
+    
+//     // Set timer period to half of the wave period (for square wave)
+//     timerAlarmWrite(buzzerTimer, period / 2, true);
+//     timerAlarmEnable(buzzerTimer);
+// }
+
+// // Non-blocking version of playSiren
+// void playSirenNB() {
+//     static int sirenStep = 0;
+//     static int currentFreq = 2000;
+//     static bool ascending = true;
+    
+//     if (!buzzerActive) {
+//         if (ascending) {
+//             currentFreq += 200;
+//             if (currentFreq >= 4000) {
+//                 ascending = false;
+//             }
+//         } else {
+//             currentFreq -= 200;
+//             if (currentFreq <= 2000) {
+//                 ascending = true;
+//                 sirenStep++;
+//             }
+//         }
+        
+//         if (sirenStep < 3) {
+//             playToneNB(currentFreq, 20);
+//         } else {
+//             sirenStep = 0; // Reset for next time
+//         }
+//     }
+// }
+
+// // Non-blocking version of playUrgentBeeps
+// void playUrgentBeepsNB() {
+//     static int beepCount = 0;
+//     static unsigned long lastBeepTime = 0;
+//     const int BEEP_INTERVAL = 60; // 30ms on + 30ms off
+    
+//     if (!buzzerActive && (millis() - lastBeepTime >= BEEP_INTERVAL)) {
+//         if (beepCount < 8) {
+//             playToneNB(4000, 30);
+//             beepCount++;
+//             lastBeepTime = millis();
+//         } else {
+//             beepCount = 0; // Reset for next time
+//         }
+//     }
+// }
+
+// // Non-blocking version of playWarningPattern
+// void playWarningPatternNB() {
+//     static unsigned long lastPatternTime = 0;
+//     const unsigned long PATTERN_INTERVAL = 1000; // Time between patterns
+    
+//     if (millis() - lastPatternTime >= PATTERN_INTERVAL) {
+//         playUrgentBeepsNB();
+//         lastPatternTime = millis();
+//     }
+// }
 
 void setup() {
   // Initialize Serial Monitor
@@ -250,8 +343,14 @@ void setup() {
 
   Serial.println("GPS Initialized!");
 
-  // Buzzer Setup
+  // // Buzzer Setup
   pinMode(BUZZER_PIN, OUTPUT); // configure GPIO8 as an output (can be set to high (buzzer on) or low (buzzer off)
+
+  // // Buzzer Setup
+  // pinMode(BUZZER_PIN, OUTPUT);
+  // // Use timer 1 (timer 0 might be used by other functions)
+  // buzzerTimer = timerBegin(1, 80, true);  // Timer 1, prescaler 80, count up
+  // timerAttachInterrupt(buzzerTimer, &onBuzzerTimer, true);
 
   // LED Setup
   pinMode(LED_BUILTIN, OUTPUT);
@@ -325,7 +424,7 @@ void loop() {
 
   // Read data from GPS module
   char c = GPS.read();
-  if ((c) && (GPSECHO)) Serial.write(c);
+  // if ((c) && (GPSECHO)) Serial.write(c);
   if (GPS.newNMEAreceived()) {
     if (!GPS.parse(GPS.lastNMEA())) {
       return;  // Fail to parse, so we wait for the next sentence
@@ -336,7 +435,6 @@ void loop() {
   Serial.println("Acceleration: x = " + String(ax) + " y = " + String(ay) + " z = " + String(az));
   Serial.println("Dynamic Acceleration = " + String(dynamic_acceleration) + "G");
   Serial.println("Heartrate Measurement = " + String(heartRateValue));
-  Serial.println();
 
   // bool alertGenerate = checkAlerts(temperature, ax, ay, az, heartRateValue);
   checkAlerts(temperature, ax, ay, az, heartRateValue);
@@ -490,7 +588,8 @@ void playWarningPattern() {
   // Combine different warning sounds
   // playSiren();
   // delay(100);
-  playUrgentBeeps();
+  // playUrgentBeeps();
+  playTone(4000, 30);
   // delay(100);
   // playSiren();
 }
@@ -594,4 +693,3 @@ String formatGPSData() {
 
   return data;  // Return the formatted string
 }
-
