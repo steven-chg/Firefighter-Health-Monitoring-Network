@@ -15,7 +15,7 @@ Adafruit_LSM6DSO32 dso32;
 
 // LoRa Network Settings
 #define TERMINAL_NODE_ID 1 // The ID of the terminal node where messages stop
-#define NODE_ID 3          // Unique ID for this node
+#define NODE_ID 2          // Unique ID for this node
 
 // Maximum number of messages to track
 #define MAX_TRACKED_MESSAGES 50
@@ -45,7 +45,7 @@ int trackedIndex = 0;
 
 // Alert thesholds
 const int HR_MAX = 150;
-const int HR_MIN = 0;              /////////////////////////////////////////// CHANGE BACK TO 40
+const int HR_MIN = -2;              /////////////////////////////////////////// CHANGE BACK TO 40
 const float TEMP_MAX = 27.0;        /////////////////////////////////////////// CHANGE BACK TO 40
 const float MOVEMENT_THRESHOLD = 0.5;
 const float MS2_TO_G = 1.0 / 9.81;
@@ -272,13 +272,14 @@ void loop() {
     msgID |= (unsigned long)LoRa.read();
 
     // Read the payload
-    String passTemp = LoRa.readString();
-    String passAcc = LoRa.readString();
-    String passHR = LoRa.readString();
+    float passTemp = (float) LoRa.read();
+    float passAcc = (float) LoRa.read();
+    int passHR = (int) LoRa.read();
+    int TempAlert = (int) LoRa.read();
+    int MotionAlert = (int) LoRa.read();
+    int HRAlert = (int) LoRa.read(); 
     String passGPS = LoRa.readString();
-    int TempAlert = LoRa.read();
-    int MotionAlert = LoRa.read();
-    int HRAlert = LoRa.read(); 
+
 
     // Check for duplicates
     if (isDuplicate(msgID)) {
@@ -316,8 +317,8 @@ void loop() {
   // Heartrate Reading
   int heartRateValue = 0;
   if ((digitalRead(9) == 1) || (digitalRead(10) == 1)) {
-    Serial.println('!');
-    heartRateValue = 1;
+    Serial.println("No Heart Rate Reading");
+    heartRateValue = -1;
   } else {
     heartRateValue = analogRead(11);
   }
@@ -337,23 +338,8 @@ void loop() {
   Serial.println("Heartrate Measurement = " + String(heartRateValue));
   Serial.println();
 
-  // alertGenerate = checkAlerts(temperature, ax, ay, az, heartRateValue);
+  // bool alertGenerate = checkAlerts(temperature, ax, ay, az, heartRateValue);
   checkAlerts(temperature, ax, ay, az, heartRateValue);
-
-
-// struct AlertStatus{
-//   bool isHRAlert = false; // check if we should generate alert currently for heartrate
-//   bool isTempAlert = false; // check if we should generate alert currently for temperature
-//   bool isMotionAlert = false; // check if we should generate alert currently for no motion
-//   unsigned long hrAlertStart = 0; // when did heartrate start violating threshold
-//   unsigned long tempAlertStart = 0; // when did temperature start exceeding threshold
-//   float accX = 0.0; // last relevant x acc
-//   float accY = 0.0; // last relevant y acc
-//   float accZ = 0.0; // last relevant z acc 
-//   unsigned long motionAlertStart = 0; // when did motion start becoming stagnant
-//   unsigned long lastUpdate = 0; // track last time update was sent to central
-//   bool inEmergency = false; // bool of whether current node is in emergency status
-// }
 
   Serial.println("HR Alert = " + String(wearableAlert.isHRAlert));
   Serial.println("Temp Alert = " + String(wearableAlert.isTempAlert));
@@ -363,13 +349,9 @@ void loop() {
   Serial.println("Motion Alert Start = " + String(wearableAlert.motionAlertStart));
   Serial.println("In Emergency = " + String(wearableAlert.inEmergency));
 
-
-  // if (alertGenerate){
-  //   playWarningPattern();
-  // }
-  // if (wearableAlert.inEmergency){
-  //   playWarningPattern();
-  // }
+  if (wearableAlert.inEmergency){
+    playWarningPattern();
+  }
 
   unsigned long updateInterval = wearableAlert.inEmergency ? EMERGENCY_UPDATE_FREQ : NORMAL_UPDATE_FREQ;
 
@@ -385,10 +367,9 @@ void loop() {
     } else{
       gps = "no GPS signal";
     }
-
     Serial.println(gps);
 
-    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert);  // ADD GPS
+    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert); 
     wearableAlert.lastUpdate = millis();
   }
 
@@ -534,13 +515,18 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
   LoRa.write((byte)(msgID >> 16));
   LoRa.write((byte)(msgID >> 8));
   LoRa.write((byte)(msgID));
-  LoRa.print(temperature);
-  LoRa.print(acceleration);
-  LoRa.print(heartRateValue);
-  LoRa.print(GPS);
+  // LoRa.write((byte) (temperature >> 8));
+  // LoRa.write((byte) (temperature));
+  // LoRa.write((byte) (acceleration >> 8)));
+  // LoRa.write((byte) (acceleration));
+  // LoRa.write(heartRateValue);
+  // LoRa.print(temperature);
+  // LoRa.print(acceleration);
+  // LoRa.print(heartRateValue);
   LoRa.write(tempAlert);
   LoRa.write(motionAlert);
   LoRa.write(HRAlert);
+  LoRa.print(String(temperature) + ";" + String(acceleration) + ";" +  String(heartRateValue) + ";" + GPS + ";");
   LoRa.endPacket();
 
   Serial.print("Sent Message ID: ");
@@ -553,7 +539,7 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
 }
 
 // Function to forward a received message
-void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, String passTemp, String passAcc, String passHR, String passGPS, int TempAlert, int MotionAlert, int HRAlert) {
+void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, float passTemp, float passAcc, int passHR, String passGPS, int TempAlert, int MotionAlert, int HRAlert) {
   LoRa.beginPacket();
   LoRa.write(NODE_ID);               // Sender ID (this node)
   LoRa.write(numHop+1);               // number of hop the messages have done
@@ -561,13 +547,16 @@ void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, Str
   LoRa.write((byte)(msgID >> 16));
   LoRa.write((byte)(msgID >> 8));
   LoRa.write((byte)(msgID));
-  LoRa.print(passTemp);
-  LoRa.print(passAcc);
-  LoRa.print(passHR);
-  LoRa.print(passGPS);
+  LoRa.write(passTemp);
+  LoRa.write(passAcc);
+  LoRa.write(passHR);
+  // LoRa.print(temperature);
+  // LoRa.print(acceleration);
+  // LoRa.print(heartRateValue);
   LoRa.write(TempAlert);
   LoRa.write(MotionAlert);
   LoRa.write(HRAlert);
+  LoRa.print(passGPS);
   LoRa.endPacket();
 
   Serial.print("Forwarded Message ID: ");
@@ -586,22 +575,22 @@ void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, Str
 // Function to format GPS data into a string for sending over LoRa
 String formatGPSData() {
   String data = "";
-  data += "Time: ";
-  if (GPS.hour < 10) { data += '0'; }
-  data += String(GPS.hour) + ":";
-  if (GPS.minute < 10) { data += '0'; }
-  data += String(GPS.minute) + ":";
-  if (GPS.seconds < 10) { data += '0'; }
-  data += String(GPS.seconds) + "." + String(GPS.milliseconds);
+  // data += "Time: ";
+  // if (GPS.hour < 10) { data += '0'; }
+  // data += String(GPS.hour) + ":";
+  // if (GPS.minute < 10) { data += '0'; }
+  // data += String(GPS.minute) + ":";
+  // if (GPS.seconds < 10) { data += '0'; }
+  // data += String(GPS.seconds) + "." + String(GPS.milliseconds);
 
-  data += " Date: " + String(GPS.day) + "/" + String(GPS.month) + "/20" + String(GPS.year);
+  // data += " Date: " + String(GPS.day) + "/" + String(GPS.month) + "/20" + String(GPS.year);
 
   data += " Lat: " + String(GPS.latitude, 4) + GPS.lat;
   data += " Lon: " + String(GPS.longitude, 4) + GPS.lon;
 
-  data += " Speed: " + String(GPS.speed);
-  data += " Alt: " + String(GPS.altitude);
-  data += " Sat: " + String((int)GPS.satellites);
+  // data += " Speed: " + String(GPS.speed);
+  // data += " Alt: " + String(GPS.altitude);
+  // data += " Sat: " + String((int)GPS.satellites);
 
   return data;  // Return the formatted string
 }
