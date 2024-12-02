@@ -4,6 +4,7 @@
 #include <Adafruit_BMP085.h>
 #include <Adafruit_LSM6DSO32.h>
 #include <Adafruit_GPS.h>
+#include <ArduinoBLE.h>
 
 Adafruit_BMP085 bmp;
 Adafruit_LSM6DSO32 dso32;
@@ -49,7 +50,7 @@ int trackedIndex = 0;
 
 // Alert thesholds
 const int HR_MAX = 150;
-const int HR_MIN = -2;              /////////////////////////////////////////// CHANGE BACK TO 40
+const int HR_MIN = 40;              /////////////////////////////////////////// CHANGE BACK TO 40
 const float TEMP_MAX = 27.0;        /////////////////////////////////////////// CHANGE BACK TO 40
 const float MOVEMENT_THRESHOLD = 0.5;
 const float MS2_TO_G = 1.0 / 9.81;
@@ -62,6 +63,21 @@ const unsigned long MOTION_ALERT_TIME = 60000;  // 60 seconds
 // GPS update frequency
 const unsigned long NORMAL_UPDATE_FREQ = 1000; // 1 second
 const unsigned long EMERGENCY_UPDATE_FREQ = 500; // half a second
+
+// Battery Voltage
+const int VBAT_SENSE_PIN = 4;  // GPIO pin 4 (ADC1_CH3) for battery sensing
+const float DIVIDER_RATIO = 12.0;  // Voltage divider ratio (100k + 10k) / 10k = 11
+const float ADC_REFERENCE = 3.3;  // ESP32 ADC reference voltage
+const float ADC_RESOLUTION = 4095.0;  // ESP32 has 12-bit ADC (2^12 - 1)
+
+// Heart Rate BT
+BLEDevice peripheral;
+BLECharacteristic heartRateCharacteristic;
+bool isConnected = false;
+int lastHeartRate = 0;
+
+// For averaging readings
+const int NUM_SAMPLES = 10;                                                 
 
 struct AlertStatus{
   bool isHRAlert = false; // check if we should generate alert currently for heartrate
@@ -175,10 +191,67 @@ AlertStatus wearableAlert;
 //     }
 // }
 
+bool connectToHRM() {
+  if (isConnected) return true;
+  
+  peripheral = BLE.available();
+  
+  if (peripheral) {
+    if (peripheral.localName() == "HRM-Dual:084939") {
+      BLE.stopScan();
+      Serial.println("Found HRM device");
+      
+      if (peripheral.connect()) {
+        Serial.println("Connected to HRM");
+        
+        if (peripheral.discoverAttributes()) {
+          BLEService service = peripheral.service("180d");
+          heartRateCharacteristic = service.characteristic("2a37");
+          
+          if (heartRateCharacteristic.subscribe()) {
+            isConnected = true;
+            Serial.println("Subscribed to heart rate characteristic");
+            return true;
+          }
+        }
+      }
+      peripheral.disconnect();
+    }
+  }
+  
+  isConnected = false;
+  BLE.scanForUuid("180D");
+  return false;
+}
+
+int getHeartRate() {
+  if (!isConnected) {
+    if (!connectToHRM()) {
+      return lastHeartRate;
+    }
+  }
+  
+  if (!peripheral.connected()) {
+    Serial.println("Lost connection");
+    isConnected = false;
+    return lastHeartRate;
+  }
+  
+  if (heartRateCharacteristic.valueUpdated()) {
+    uint8_t value[6];
+    heartRateCharacteristic.readValue(value, 6);
+    lastHeartRate = value[1];
+    Serial.print("New heart rate: ");
+    Serial.println(lastHeartRate);
+  }
+  
+  return lastHeartRate;
+}
+
 void setup() {
   // Initialize Serial Monitor
   Serial.begin(115200);
-  while (!Serial);
+  // while (!Serial);
 
   // Initialize LoRa
   SPI.begin(36, 35, 48, 47);  // Set SPI pins for LoRa
@@ -187,6 +260,7 @@ void setup() {
     Serial.println("LoRa initialization failed!");
     while (1);
   }
+  LoRa.setSyncWord(0xF3);
   
   Serial.print("Node ");
   Serial.print(NODE_ID);
@@ -354,6 +428,19 @@ void setup() {
 
   // LED Setup
   pinMode(LED_BUILTIN, OUTPUT);
+
+  // Configure ADC
+  analogReadResolution(12);  // Set ADC resolution to 12 bits
+  analogSetAttenuation(ADC_11db);  // Set ADC attenuation for 3.3V full-scale range
+
+  // Heartrate BT Setup
+  if (!BLE.begin()) {
+    Serial.println("Starting BLE failed!");
+  }
+  Serial.println("BLE Heart Rate Monitor initialized");
+  BLE.scanForUuid("180D");
+
+  delay(1000);
 }
 
 void loop() {
@@ -370,15 +457,42 @@ void loop() {
     msgID |= (unsigned long)LoRa.read() << 8;
     msgID |= (unsigned long)LoRa.read();
 
-    // Read the payload
-    float passTemp = (float) LoRa.read();
-    float passAcc = (float) LoRa.read();
-    int passHR = (int) LoRa.read();
-    int TempAlert = (int) LoRa.read();
-    int MotionAlert = (int) LoRa.read();
-    int HRAlert = (int) LoRa.read(); 
-    String passGPS = LoRa.readString();
+    // // Read the payload
+    // float passTemp = (float) LoRa.read();
+    // float passAcc = (float) LoRa.read();
+    // int passHR = (int) LoRa.read();
+    // int TempAlert = (int) LoRa.read();
+    // int MotionAlert = (int) LoRa.read();
+    // int HRAlert = (int) LoRa.read(); 
+    // String passGPS = LoRa.readString();
 
+    // Read the Data
+    int TempAlert = LoRa.read();
+    int MotionAlert = LoRa.read();
+    int HRAlert = LoRa.read();
+    String data = LoRa.readString();
+    
+    String passTemp;
+    String passAcc;
+    String passHR;
+    String passGPS;
+    String passVoltage;
+
+    for(int i=0;i<5;i++){
+      // Find the semicolon (end of key-value pair)
+      int separatorIndex = data.indexOf(';');
+      
+      // Extract the current key-value pair
+      String value = data.substring(0, separatorIndex);
+
+      // Remove the processed part from the original string
+      data = data.substring(separatorIndex + 1);
+      if(i==0)passTemp = value;
+      else if(i==1)passAcc = value;
+      else if(i==2)passHR = value;
+      else if(i==3)passGPS = value;
+      else passVoltage = value;
+    }
 
     // Check for duplicates
     if (isDuplicate(msgID)) {
@@ -391,7 +505,7 @@ void loop() {
 
     // Forward the message to the terminal node
     Serial.println("Forwarding message to terminal node...");
-    sendForwardMessage(senderID, numHop, msgID, passTemp, passAcc, passHR, passGPS, TempAlert, MotionAlert, HRAlert);
+    sendForwardMessage(senderID, numHop, msgID, passTemp, passAcc, passHR, passGPS, passVoltage, TempAlert, MotionAlert, HRAlert);
   }
 
  // BMP180 Reading
@@ -411,15 +525,21 @@ void loop() {
   float axG = ax*MS2_TO_G;
   float ayG = ay*MS2_TO_G;
   float azG = az*MS2_TO_G;
-  float dynamic_acceleration = abs(sqrt(axG*axG + ayG*ayG + azG*azG) - 1.0);
+  float dynamic_acceleration = abs(sqrt(axG*axG + ayG*ayG + azG*azG) - 1.03);
 
-  // Heartrate Reading
-  int heartRateValue = 0;
-  if ((digitalRead(9) == 1) || (digitalRead(10) == 1)) {
-    Serial.println("No Heart Rate Reading");
-    heartRateValue = -1;
-  } else {
-    heartRateValue = analogRead(11);
+  // Heartrate Reading ECG/EKG
+  // int heartRateValue = 0;
+  // if ((digitalRead(9) == 1) || (digitalRead(10) == 1)) {
+  //   Serial.println("No Heart Rate Reading");
+  //   heartRateValue = -1;
+  // } else {
+  //   heartRateValue = analogRead(11);
+  // }
+
+  int heartRateValue = getHeartRate();
+  if (heartRateValue == 0) {
+      Serial.println("No Heart Rate Reading");
+      heartRateValue = -1;
   }
 
   // Read data from GPS module
@@ -451,6 +571,20 @@ void loop() {
     playWarningPattern();
   }
 
+  // Find battery voltage and calculate battery percentage
+  float batteryVoltage = readBatteryVoltage();
+  batteryVoltage += 0.2;
+  // Serial.print("Battery Voltage: ");
+  // Serial.print(batteryVoltage, 2);  // Print with 2 decimal places
+  // Serial.println("V");
+  
+  // Optional: Add battery percentage calculation for a typical Li-ion battery
+  float percentage = ((batteryVoltage - 3.0) / (4.2 - 3.0)) * 100;
+  percentage = constrain(percentage, 0, 100);  // Constrain between 0-100%
+  percentage = roundf(percentage);  // round to nearest whole number
+  
+  Serial.print("Battery Percentage: " + String(percentage) + "%");
+
   unsigned long updateInterval = wearableAlert.inEmergency ? EMERGENCY_UPDATE_FREQ : NORMAL_UPDATE_FREQ;
 
   // Example: Sending a message from this node periodically
@@ -467,11 +601,29 @@ void loop() {
     }
     Serial.println(gps);
 
-    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert); 
+    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, batteryVoltage, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert); 
     wearableAlert.lastUpdate = millis();
   }
 
   delay(100); // Small delay to avoid spamming
+}
+
+float readBatteryVoltage() {
+  long sum = 0;
+  
+  // Take multiple samples
+  for(int i = 0; i < NUM_SAMPLES; i++) {
+    sum += analogRead(VBAT_SENSE_PIN);
+    delay(10);  // Small delay between readings
+  }
+  
+  // Calculate average
+  float averageReading = sum / (float)NUM_SAMPLES;
+  
+  // Convert ADC reading to actual battery voltage
+  float voltage = (averageReading / ADC_RESOLUTION) * ADC_REFERENCE * DIVIDER_RATIO;
+  
+  return voltage;
 }
 
 bool noMovement(float ax, float ay, float az) {
@@ -604,7 +756,7 @@ bool isDuplicate(unsigned long msgID) {
   return false;
 }
 
-void sendMessage(float temperature, float acceleration, int heartRateValue, String GPS, bool tempAlert, bool motionAlert, bool HRAlert) {
+void sendMessage(float temperature, float acceleration, int heartRateValue, String GPS, float batteryVoltage, bool tempAlert, bool motionAlert, bool HRAlert) {
   unsigned long msgID = millis(); // Simple unique ID based on uptime
   int numHop = 1;
   LoRa.beginPacket();
@@ -625,7 +777,7 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
   LoRa.write(tempAlert);
   LoRa.write(motionAlert);
   LoRa.write(HRAlert);
-  LoRa.print(String(temperature) + ";" + String(acceleration) + ";" +  String(heartRateValue) + ";" + GPS + ";");
+  LoRa.print(String(temperature) + ";" + String(acceleration) + ";" +  String(heartRateValue) + ";" + GPS + ";" + String(batteryVoltage) + ";");
   LoRa.endPacket();
 
   Serial.print("Sent Message ID: ");
@@ -638,24 +790,24 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
 }
 
 // Function to forward a received message
-void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, float passTemp, float passAcc, int passHR, String passGPS, int TempAlert, int MotionAlert, int HRAlert) {
+void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, String passTemp, String passAcc, String passHR, String passGPS, String passVoltage, int TempAlert, int MotionAlert, int HRAlert) {
   LoRa.beginPacket();
-  LoRa.write(NODE_ID);               // Sender ID (this node)
+  LoRa.write(originalSender);               // Sender ID (this node)
   LoRa.write(numHop+1);               // number of hop the messages have done
   LoRa.write((byte)(msgID >> 24));   // Original Message ID
   LoRa.write((byte)(msgID >> 16));
   LoRa.write((byte)(msgID >> 8));
   LoRa.write((byte)(msgID));
-  LoRa.write(passTemp);
-  LoRa.write(passAcc);
-  LoRa.write(passHR);
+  // LoRa.write(passTemp);
+  // LoRa.write(passAcc);
+  // LoRa.write(passHR);
   // LoRa.print(temperature);
   // LoRa.print(acceleration);
   // LoRa.print(heartRateValue);
   LoRa.write(TempAlert);
   LoRa.write(MotionAlert);
   LoRa.write(HRAlert);
-  LoRa.print(passGPS);
+  LoRa.print(passTemp + ";" + passAcc + ";" +  passHR + ";" + passGPS + ";" + passVoltage + ";");
   LoRa.endPacket();
 
   Serial.print("Forwarded Message ID: ");
