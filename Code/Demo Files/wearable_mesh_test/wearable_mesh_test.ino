@@ -41,6 +41,8 @@ Adafruit_GPS GPS(&gpsSerial);
 unsigned long trackedMsgIDs[MAX_TRACKED_MESSAGES];
 int trackedIndex = 0;
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Alert thesholds
 const int HR_MAX = 150;
 const int HR_MIN = -2;              /////////////////////////////////////////// CHANGE BACK TO 40
@@ -78,6 +80,7 @@ struct AlertStatus{
   unsigned long motionAlertStart = 0; // when did motion start becoming stagnant
   unsigned long lastUpdate = 0; // track last time update was sent to central
   bool inEmergency = false; // bool of whether current node is in emergency status
+  bool lowBattery = false;
 };
 
 // Structure to hold message details
@@ -88,94 +91,6 @@ struct LoRaMessage {
 };
 
 AlertStatus wearableAlert;
-
-// // Timer interrupt handler
-// void IRAM_ATTR onBuzzerTimer() {
-//     static bool buzzerState = false;
-//     if (millis() >= buzzerEndTime) {
-//         // Stop the buzzer
-//         digitalWrite(BUZZER_PIN, LOW);
-//         buzzerActive = false;
-//         timerAlarmDisable(buzzerTimer);
-//         return;
-//     }
-    
-//     // Toggle the buzzer state
-//     buzzerState = !buzzerState;
-//     digitalWrite(BUZZER_PIN, buzzerState);
-// }
-
-// // Non-blocking version of playTone
-// void playToneNB(int frequency, int duration) {
-//     if (buzzerActive) return; // Don't interrupt current tone
-    
-//     buzzerActive = true;
-//     currentFreq = frequency;
-//     buzzerEndTime = millis() + duration;
-    
-//     // Calculate period in microseconds
-//     unsigned long period = 1000000 / frequency;
-    
-//     // Set timer period to half of the wave period (for square wave)
-//     timerAlarmWrite(buzzerTimer, period / 2, true);
-//     timerAlarmEnable(buzzerTimer);
-// }
-
-// // Non-blocking version of playSiren
-// void playSirenNB() {
-//     static int sirenStep = 0;
-//     static int currentFreq = 2000;
-//     static bool ascending = true;
-    
-//     if (!buzzerActive) {
-//         if (ascending) {
-//             currentFreq += 200;
-//             if (currentFreq >= 4000) {
-//                 ascending = false;
-//             }
-//         } else {
-//             currentFreq -= 200;
-//             if (currentFreq <= 2000) {
-//                 ascending = true;
-//                 sirenStep++;
-//             }
-//         }
-        
-//         if (sirenStep < 3) {
-//             playToneNB(currentFreq, 20);
-//         } else {
-//             sirenStep = 0; // Reset for next time
-//         }
-//     }
-// }
-
-// // Non-blocking version of playUrgentBeeps
-// void playUrgentBeepsNB() {
-//     static int beepCount = 0;
-//     static unsigned long lastBeepTime = 0;
-//     const int BEEP_INTERVAL = 60; // 30ms on + 30ms off
-    
-//     if (!buzzerActive && (millis() - lastBeepTime >= BEEP_INTERVAL)) {
-//         if (beepCount < 8) {
-//             playToneNB(4000, 30);
-//             beepCount++;
-//             lastBeepTime = millis();
-//         } else {
-//             beepCount = 0; // Reset for next time
-//         }
-//     }
-// }
-
-// // Non-blocking version of playWarningPattern
-// void playWarningPatternNB() {
-//     static unsigned long lastPatternTime = 0;
-//     const unsigned long PATTERN_INTERVAL = 1000; // Time between patterns
-    
-//     if (millis() - lastPatternTime >= PATTERN_INTERVAL) {
-//         playUrgentBeepsNB();
-//         lastPatternTime = millis();
-//     }
-// }
 
 void setup() {
   // Initialize Serial Monitor
@@ -350,12 +265,6 @@ void setup() {
   // // Buzzer Setup
   pinMode(BUZZER_PIN, OUTPUT); // configure GPIO8 as an output (can be set to high (buzzer on) or low (buzzer off)
 
-  // // Buzzer Setup
-  // pinMode(BUZZER_PIN, OUTPUT);
-  // // Use timer 1 (timer 0 might be used by other functions)
-  // buzzerTimer = timerBegin(1, 80, true);  // Timer 1, prescaler 80, count up
-  // timerAttachInterrupt(buzzerTimer, &onBuzzerTimer, true);
-
   // LED Setup
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -380,19 +289,11 @@ void loop() {
     msgID |= (unsigned long)LoRa.read() << 8;
     msgID |= (unsigned long)LoRa.read();
 
-    // // Read the payload
-    // float passTemp = (float) LoRa.read();
-    // float passAcc = (float) LoRa.read();
-    // int passHR = (int) LoRa.read();
-    // int TempAlert = (int) LoRa.read();
-    // int MotionAlert = (int) LoRa.read();
-    // int HRAlert = (int) LoRa.read(); 
-    // String passGPS = LoRa.readString();
-
     // Read the Data
     int TempAlert = LoRa.read();
     int MotionAlert = LoRa.read();
     int HRAlert = LoRa.read();
+    int lowBattery = LoRa.read();
     String data = LoRa.readString();
     
     String passTemp;
@@ -428,7 +329,7 @@ void loop() {
 
     // Forward the message to the terminal node
     Serial.println("Forwarding message to terminal node...");
-    sendForwardMessage(senderID, numHop, msgID, passTemp, passAcc, passHR, passGPS, passVoltage, TempAlert, MotionAlert, HRAlert);
+    sendForwardMessage(senderID, numHop, msgID, passTemp, passAcc, passHR, passGPS, passVoltage, TempAlert, MotionAlert, HRAlert, lowBattery);
     
   }
   
@@ -487,16 +388,24 @@ void loop() {
 //   Serial.println("Motion Alert Start = " + String(wearableAlert.motionAlertStart));
 //   Serial.println("In Emergency = " + String(wearableAlert.inEmergency));
 
-//   if (wearableAlert.inEmergency){
-//     playWarningPattern();
-//   }
-
   float batteryVoltage = readBatteryVoltage();
   batteryVoltage += 0.2;
   // Optional: Add battery percentage calculation for a typical Li-ion battery
   float percentage = ((batteryVoltage - 3.0) / (4.2 - 3.0)) * 100;
   percentage = constrain(percentage, 0, 100);  // Constrain between 0-100%
   percentage = roundf(percentage);  // round to nearest whole number
+
+  if(percentage < 10){
+    wearableAlert.lowBattery = true;
+  } else{
+    wearableAlert.lowBattery = false;
+  }
+
+  wearableAlert.inEmergency = wearableAlert.isHRAlert || wearableAlert.isTempAlert || wearableAlert.isMotionAlert || wearableAlert.lowBattery;
+
+  if (wearableAlert.inEmergency){
+    playWarningPattern();
+  }
 
   Serial.print("Battery Percentage: " + String(percentage) + "%");
 
@@ -520,7 +429,7 @@ void loop() {
     float dynamic_acceleration = 0.00;
     int heartRateValue = 50;
 
-    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, batteryVoltage, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert); 
+    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, batteryVoltage, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert, wearableAlert.lowBattery); 
     wearableAlert.lastUpdate = millis();
     digitalWrite(LED_BUILTIN,0);
   }
@@ -556,64 +465,6 @@ float readBatteryVoltage() {
   float voltage = (averageReading / ADC_RESOLUTION) * ADC_REFERENCE * DIVIDER_RATIO;
   
   return voltage;
-}
-
-void checkAlerts(float temperature, float ax, float ay, float az, int heartRateValue){
-  unsigned long currentTime = millis();
-  // bool alertGenerate = false;
-  
-  // Heart Rate Alert Check
-  // check if heart rate is currently above or below thresholds
-  if (heartRateValue > HR_MAX || heartRateValue < HR_MIN){
-    // if heart rate exceeds threshold and hrAlertStart == 0, set hrAlertStart to currentTime 
-    if (wearableAlert.hrAlertStart == 0){
-      wearableAlert.hrAlertStart = currentTime;
-    } else if (currentTime - wearableAlert.hrAlertStart > HR_ALERT_TIME){
-      wearableAlert.isHRAlert = true;
-      // alertGenerate = true;
-    }
-  } else{
-    // heart rate doesn't exceed threshold, so set isHRAlert to false and hrAlertStart to 0
-    wearableAlert.isHRAlert = false;
-    wearableAlert.hrAlertStart = 0;
-  }
-
-  // Temperature Alert Check
-  // check if temperature exceeds threshold
-  if (temperature > TEMP_MAX){
-    // if temperature exceeds threshold and isTempAlert == false or tempAlertStart == 0, set tempAlertStart to currentTime
-    if (wearableAlert.tempAlertStart == 0){
-      wearableAlert.tempAlertStart = currentTime;
-    } else if (currentTime - wearableAlert.tempAlertStart > TEMP_ALERT_TIME){
-      wearableAlert.isTempAlert = true;
-      // alertGenerate = true;
-    } 
-  } else{
-      // temperature doesn't exceed threshold, so set isTempAlert to false and tempAlertStart to 0
-      wearableAlert.isTempAlert = false;
-      wearableAlert.tempAlertStart = 0;
-  }
-
-  // Motion Alert Check
-  if (noMovement(ax, ay, az) == true){
-    // if there is no movement and motionAlertStart == 0, set motionAlertStart to currentTime
-    if(wearableAlert.motionAlertStart == 0){
-      wearableAlert.motionAlertStart = currentTime;
-    } else if(currentTime - wearableAlert.motionAlertStart > MOTION_ALERT_TIME){
-      // if there is no movement for over 60 seconds
-      wearableAlert.isMotionAlert = true;
-      // alertGenerate = true;
-    }
-  } else{
-    // if there is movement, set isMotionAlert to false and reset motionAlertStart to 0
-    wearableAlert.isMotionAlert = false;
-    wearableAlert.motionAlertStart = 0;
-  }
-
-  // Update Emergency Status
-  wearableAlert.inEmergency = wearableAlert.isHRAlert || wearableAlert.isTempAlert || wearableAlert.isMotionAlert;
-
-  // return alertGenerate
 }
 
 // Add a message ID to the tracking array
@@ -676,7 +527,7 @@ bool isDuplicate(unsigned long msgID) {
   return false;
 }
 
-void sendMessage(float temperature, float acceleration, int heartRateValue, String GPS, float voltage, bool tempAlert, bool motionAlert, bool HRAlert) {
+void sendMessage(float temperature, float acceleration, int heartRateValue, String GPS, float voltage, bool tempAlert, bool motionAlert, bool HRAlert, bool lowBattery) {
   unsigned long msgID = millis(); // Simple unique ID based on uptime
   int numHop = 1;
   LoRa.beginPacket();
@@ -697,6 +548,7 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
   LoRa.write(tempAlert);
   LoRa.write(motionAlert);
   LoRa.write(HRAlert);
+  LoRa.write(lowBattery);
   LoRa.print(String(temperature) + ";" + String(acceleration) + ";" +  String(heartRateValue) + ";" + GPS + ";" + String(voltage) + ";");
   LoRa.endPacket();
 
@@ -710,7 +562,7 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
 }
 
 // Function to forward a received message
-void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, String passTemp, String passAcc, String passHR, String passGPS, String passVoltage, int TempAlert, int MotionAlert, int HRAlert) {
+void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, String passTemp, String passAcc, String passHR, String passGPS, String passVoltage, int TempAlert, int MotionAlert, int HRAlert, int lowBattery) {
   LoRa.beginPacket();
   LoRa.write(originalSender);               // Sender ID (this node)
   LoRa.write(numHop+1);               // number of hop the messages have done
@@ -727,6 +579,7 @@ void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, Str
   LoRa.write(TempAlert);
   LoRa.write(MotionAlert);
   LoRa.write(HRAlert);
+  LoRa.write(lowBattery);
   LoRa.print(passTemp + ";" + passAcc + ";" +  passHR + ";" + passGPS + ";" + passVoltage + ";");
   LoRa.endPacket();
 
