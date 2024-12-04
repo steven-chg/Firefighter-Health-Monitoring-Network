@@ -15,7 +15,7 @@ Adafruit_LSM6DSO32 dso32;
 
 // LoRa Network Settings
 #define TERMINAL_NODE_ID 1 // The ID of the terminal node where messages stop
-#define NODE_ID 3          // Unique ID for this node
+#define NODE_ID 4          // Unique ID for this node
 
 // Maximum number of messages to track
 #define MAX_TRACKED_MESSAGES 50
@@ -59,6 +59,8 @@ const unsigned long MOTION_ALERT_TIME = 60000;  // 60 seconds
 const unsigned long NORMAL_UPDATE_FREQ = 1000; // 1 second
 const unsigned long EMERGENCY_UPDATE_FREQ = 500; // half a second
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Battery Voltage
 const int VBAT_SENSE_PIN = 4;  // GPIO pin 4 (ADC1_CH3) for battery sensing
 const float DIVIDER_RATIO = 12.0;  // Voltage divider ratio (100k + 10k) / 10k = 11
@@ -67,6 +69,9 @@ const float ADC_RESOLUTION = 4095.0;  // ESP32 has 12-bit ADC (2^12 - 1)
 
 // For averaging readings
 const int NUM_SAMPLES = 10;    
+int num_voltage_samples = 0;
+float running_voltage_sum = 0;
+float current_average_voltage = 4.2;
 
 struct AlertStatus{
   bool isHRAlert = false; // check if we should generate alert currently for heartrate
@@ -294,15 +299,18 @@ void loop() {
     int MotionAlert = LoRa.read();
     int HRAlert = LoRa.read();
     int lowBattery = LoRa.read();
+    int reading = LoRa.read();
     String data = LoRa.readString();
     
     String passTemp;
     String passAcc;
     String passHR;
-    String passGPS;
+    // String passGPS;
     String passVoltage;
+    String Latitude;
+    String Longitude;
 
-    for(int i=0;i<5;i++){
+    for(int i=0;i<6;i++){
       // Find the semicolon (end of key-value pair)
       int separatorIndex = data.indexOf(';');
       
@@ -314,8 +322,10 @@ void loop() {
       if(i==0)passTemp = value;
       else if(i==1)passAcc = value;
       else if(i==2)passHR = value;
-      else if(i==3) passGPS = value;
-      else passVoltage = value;
+      // else if(i==3) passGPS = value;
+      else if(i==3) passVoltage = value;
+      else if(i==4) Latitude = value;
+      else Longitude = value;
     }
 
     // Check for duplicates
@@ -329,7 +339,7 @@ void loop() {
 
     // Forward the message to the terminal node
     Serial.println("Forwarding message to terminal node...");
-    sendForwardMessage(senderID, numHop, msgID, passTemp, passAcc, passHR, passGPS, passVoltage, TempAlert, MotionAlert, HRAlert, lowBattery);
+    sendForwardMessage(senderID, numHop, msgID, passTemp, passAcc, passHR, Latitude, Longitude, passVoltage, TempAlert, MotionAlert, HRAlert, lowBattery, reading);
     
   }
   
@@ -390,8 +400,18 @@ void loop() {
 
   float batteryVoltage = readBatteryVoltage();
   batteryVoltage += 0.2;
+
+  if(num_voltage_samples == 10){
+    current_average_voltage = running_voltage_sum / 10;
+    num_voltage_samples = 0;
+    running_voltage_sum = 0;
+  }
+  running_voltage_sum += batteryVoltage;
+  num_voltage_samples += 1;
+
+
   // Optional: Add battery percentage calculation for a typical Li-ion battery
-  float percentage = ((batteryVoltage - 3.0) / (4.2 - 3.0)) * 100;
+  float percentage = ((current_average_voltage - 3.0) / (4.2 - 3.0)) * 100;
   percentage = constrain(percentage, 0, 100);  // Constrain between 0-100%
   percentage = roundf(percentage);  // round to nearest whole number
 
@@ -424,12 +444,15 @@ void loop() {
     //   gps = "no GPS signal";
     // }
     // Serial.println(gps);
-    String gps = "no GPS signal";
+    // String gps = "no GPS signal";
     float temperature = 10.00;
     float dynamic_acceleration = 0.00;
     int heartRateValue = 50;
+    String Latitude = "00.000000";
+    String Longitude = "00.000000";
+    int reading = 0;
 
-    sendMessage(temperature, dynamic_acceleration, heartRateValue, gps, batteryVoltage, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert, wearableAlert.lowBattery); 
+    sendMessage(temperature, dynamic_acceleration, heartRateValue, Latitude, Longitude, current_average_voltage, wearableAlert.isTempAlert, wearableAlert.isMotionAlert, wearableAlert.isHRAlert, wearableAlert.lowBattery, reading); 
     wearableAlert.lastUpdate = millis();
     digitalWrite(LED_BUILTIN,0);
   }
@@ -527,7 +550,7 @@ bool isDuplicate(unsigned long msgID) {
   return false;
 }
 
-void sendMessage(float temperature, float acceleration, int heartRateValue, String GPS, float voltage, bool tempAlert, bool motionAlert, bool HRAlert, bool lowBattery) {
+void sendMessage(float temperature, float acceleration, int heartRateValue, String Latitude, String Longitude, float voltage, bool tempAlert, bool motionAlert, bool HRAlert, bool lowBattery, int reading) {
   unsigned long msgID = millis(); // Simple unique ID based on uptime
   int numHop = 1;
   LoRa.beginPacket();
@@ -549,7 +572,8 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
   LoRa.write(motionAlert);
   LoRa.write(HRAlert);
   LoRa.write(lowBattery);
-  LoRa.print(String(temperature) + ";" + String(acceleration) + ";" +  String(heartRateValue) + ";" + GPS + ";" + String(voltage) + ";");
+  LoRa.write(reading);
+  LoRa.print(String(temperature) + ";" + String(acceleration) + ";" +  String(heartRateValue) + ";" + String(voltage) + ";" + Latitude + ";" + Longitude + ";");
   LoRa.endPacket();
 
   Serial.print("Sent Message ID: ");
@@ -562,7 +586,7 @@ void sendMessage(float temperature, float acceleration, int heartRateValue, Stri
 }
 
 // Function to forward a received message
-void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, String passTemp, String passAcc, String passHR, String passGPS, String passVoltage, int TempAlert, int MotionAlert, int HRAlert, int lowBattery) {
+void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, String passTemp, String passAcc, String passHR, String Latitude, String Longitude, String passVoltage, int TempAlert, int MotionAlert, int HRAlert, int lowBattery, int reading) {
   LoRa.beginPacket();
   LoRa.write(originalSender);               // Sender ID (this node)
   LoRa.write(numHop+1);               // number of hop the messages have done
@@ -580,7 +604,8 @@ void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, Str
   LoRa.write(MotionAlert);
   LoRa.write(HRAlert);
   LoRa.write(lowBattery);
-  LoRa.print(passTemp + ";" + passAcc + ";" +  passHR + ";" + passGPS + ";" + passVoltage + ";");
+  LoRa.write(reading);
+  LoRa.print(passTemp + ";" + passAcc + ";" +  passHR + ";" + passVoltage + ";" + Latitude + ";" + Longitude + ";");
   LoRa.endPacket();
 
   Serial.print("Forwarded Message ID: ");
@@ -596,25 +621,25 @@ void sendForwardMessage(int originalSender, int numHop, unsigned long msgID, Str
   trackMessage(msgID);
 }
 
-// Function to format GPS data into a string for sending over LoRa
-String formatGPSData() {
-  String data = "";
-  // data += "Time: ";
-  // if (GPS.hour < 10) { data += '0'; }
-  // data += String(GPS.hour) + ":";
-  // if (GPS.minute < 10) { data += '0'; }
-  // data += String(GPS.minute) + ":";
-  // if (GPS.seconds < 10) { data += '0'; }
-  // data += String(GPS.seconds) + "." + String(GPS.milliseconds);
+// // Function to format GPS data into a string for sending over LoRa
+// String formatGPSData() {
+//   String data = "";
+//   // data += "Time: ";
+//   // if (GPS.hour < 10) { data += '0'; }
+//   // data += String(GPS.hour) + ":";
+//   // if (GPS.minute < 10) { data += '0'; }
+//   // data += String(GPS.minute) + ":";
+//   // if (GPS.seconds < 10) { data += '0'; }
+//   // data += String(GPS.seconds) + "." + String(GPS.milliseconds);
 
-  // data += " Date: " + String(GPS.day) + "/" + String(GPS.month) + "/20" + String(GPS.year);
+//   // data += " Date: " + String(GPS.day) + "/" + String(GPS.month) + "/20" + String(GPS.year);
 
-  data += " Lat: " + String(GPS.latitude, 4) + GPS.lat;
-  data += " Lon: " + String(GPS.longitude, 4) + GPS.lon;
+//   data += " Lat: " + String(GPS.latitude, 4) + GPS.lat;
+//   data += " Lon: " + String(GPS.longitude, 4) + GPS.lon;
 
-  // data += " Speed: " + String(GPS.speed);
-  // data += " Alt: " + String(GPS.altitude);
-  // data += " Sat: " + String((int)GPS.satellites);
+//   // data += " Speed: " + String(GPS.speed);
+//   // data += " Alt: " + String(GPS.altitude);
+//   // data += " Sat: " + String((int)GPS.satellites);
 
-  return data;  // Return the formatted string
-}
+//   return data;  // Return the formatted string
+// }
