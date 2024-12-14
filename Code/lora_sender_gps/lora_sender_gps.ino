@@ -3,14 +3,14 @@
 #include <Adafruit_GPS.h>
 
 // LoRa pins for ESP32
-// #define LORA_CS 47     // NSS (CS) pin
-// #define LORA_RST 21   // RST pin
-// #define LORA_IRQ 14   // DIO0 pin
+#define LORA_CS 47     // NSS (CS) pin
+#define LORA_RST 21   // RST pin
+#define LORA_IRQ 14   // DIO0 pin
 
 // LoRa pins
-#define LORA_CS 5     // NSS (CS) pin
-#define LORA_RST 14   // RST pin
-#define LORA_IRQ 4   // DIO0 pin
+// #define LORA_CS 5     // NSS (CS) pin
+// #define LORA_RST 14   // RST pin
+// #define LORA_IRQ 4   // DIO0 pin
 
 // Use hardware serial port 1 for GPS (ESP32 has multiple hardware UARTs)
 #define GPS_RX 16  // Connect to GPS TX
@@ -26,7 +26,7 @@ int counter = 0;
 void setup() {
   // Initialize serial ports
   Serial.begin(115200);
-  while (!Serial);
+  // while (!Serial);
 
   // LoRa setup
   Serial.println("LoRa Sender");
