@@ -15,4 +15,4 @@ A wearable health monitoring system that enables real-time tracking of firefight
 - 2+ hour battery life in high temperature conditions
 
 ## Demo
-[Watch the demo video]([insert_youtube_link_here](https://www.youtube.com/watch?v=oqk-9yflRnk))
+[Watch the demo video](https://www.youtube.com/watch?v=oqk-9yflRnk))
